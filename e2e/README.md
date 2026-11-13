@@ -1,0 +1,206 @@
+# Customer Summary panel: end-to-end tests
+
+Playwright journeys for the `customerSummaryPanel` compact window (FE-13): the launcher and the
+420x560 window its eager utility item puts at the bottom right of the page, run in a real org as
+the developer's own signed-in user. They cover what the Jest suite cannot: the real utility bar
+and record page, the real Lightning base components, focus, layout, timing and the live region.
+
+## Run
+
+```bash
+npm ci
+npm run test:e2e                         # org alias from SF_TARGET_ORG, default "agent-probe"
+SF_TARGET_ORG=my-alias npm run test:e2e  # any other signed-in alias
+SF_E2E_ORG=my-alias npm run test:e2e     # same, and wins over SF_TARGET_ORG for e2e only
+npx playwright test -g "6. typing"       # one spec
+```
+
+Chromium only (Playwright's own build, `npx playwright install chromium` if it is missing),
+one worker, no parallelism. A full run takes about three minutes (3.3 minutes for 10 of 10 in
+`agent-probe` after FE-13).
+
+## What it needs
+
+- **A deployed panel.** The org must already have the Customer Summary app
+  (`Customer_Summary.app-meta.xml`), its utility bar with `customerSummaryPanel` (eager; the item's own panel is 340x200 and only
+  holds a note, the window is on the page) and the
+  Apex behind it. The suite never deploys anything.
+- **A signed-in sf CLI session** for the alias (`sf org login web -a <alias>`). The global setup
+  asks `/usr/local/bin/sf org open --url-only --json -o <alias>` for a one-time frontdoor URL,
+  opens it in an untraced browser context and saves the session to `e2e/.auth/` (gitignored).
+  It never asks for or types a password. If the session is missing or expired it stops with one
+  line telling you to run `sf org login web -a <alias>`.
+- **The sample data**, including the account Edge Communications, which is looked up by name at run time.
+  Load it with `bash scripts/seed-sample-data.sh` (it targets `SF_TARGET_ORG`, default `agent-probe`, and
+  stops if Edge Communications already exists). It is not Developer Edition demo data.
+
+The frontdoor URL and the session it opens are secrets: they are never printed or written
+anywhere but `e2e/.auth/`. For the same reason tracing, video and HAR are off in
+`playwright.config.js` (a trace records request headers and Aura bodies). Screenshots of failures
+go to `test-results/`, the HTML report to `playwright-report/`; both are gitignored.
+
+## Model calls
+
+A full run makes **at most about seven model calls** (briefs and questions), so
+it costs money and writes brief memory rows, as any use of the panel does:
+
+| Spec | Calls |
+|---|---|
+| 1. Cmd/Ctrl-K before the window was ever opened: bottom right corner, composer focused | 0 |
+| 2. Esc returns focus from the Search button, a record field and the launcher, or falls back to the launcher; Tab can leave | 0 |
+| 3. Brief: headline, collapsed accordions, live region; the pinned bar at most 80 px, the scroll box at least 240 px | 1 |
+| 4. Composer pinned in the 420x560 window, newest answer in view | 2 |
+| 5. Latest wins | 1 |
+| 6. Typing enables Send; Enter sends | 0 |
+| 7. Drill and breadcrumb | 1 (it fails if no brief section line is drillable) |
+| 8. axe in the brief and drill states | 1, or 2 when no brief section line is drillable |
+| 9. Minimize keeps the conversation; no Expand button by default | 0 |
+| 10. Time from Cmd/Ctrl-K to the window's first paint, under 300 ms warm | 0 |
+
+Specs 5 and 6 send `/brief` of a name that matches no account: the resolver answers from SOQL
+with no model call. Spec 5 uses it as the second request because it lands well before the first
+(a question), so the test sees a late reply arrive and get dropped; it checks that the first was
+still in flight, and fails as a test problem if it was not.
+
+## How the specs find things
+
+Every test loads the Customer Summary app, then the account's record page, fresh: the window has
+never been opened. Locators pierce the panel's shadow DOM with Playwright's built-in engine:
+roles and labels first, then the panel's test hooks and the data attributes it renders
+(`data-turn`, `data-id`, `data-focus`):
+
+- `[data-cs-stage]`, the stage the eager utility item moves to the page body (the launcher and
+  the window), to scope every locator and the axe scan. The utility item itself,
+  `c-customer-summary-panel`, keeps only a note. Since FE-12 the conversation inside the window is
+  `c-customer-summary-conversation`; locators pierce its shadow root
+- the button named `Ask <agent name> ⌘K` (or `Ctrl K`), the launcher, and the `dialog`, the window
+- the region named `Conversation`, the scroll box (specs 3 and 4)
+- `.cs-sheet-controls`, the window's controls row (Minimize, and Expand when it is turned on),
+  whose bottom edge spec 3 measures the pinned bar from
+- `data-testid="abp-live-region"`, the conversation's polite live region (the role alone is not
+  enough: the page has other `role=status` regions)
+- `data-testid="abp-spinner"`, the pending turn: the question and the pulse until the reply lands
+- `data-testid="abp-summary-headline"`, the brief's summary headline, apart from the accordion
+  section headers, which are also level-2 headings
+- `lightning-breadcrumbs` and `lightning-accordion-section`, to find the drill trail, each brief
+  section and its header button
+- `article`, to find the drill view's heading
+- `button[data-id]`, a drillable section line or result row
+
+Spec 3 measures the window at 420x560 after one brief, with the account's "Earlier summaries" list
+rendered: from the controls row's bottom edge to the top of the scroll box is at most 80 CSS px,
+the scroll box is at least 240 CSS px tall, and the bar holds the Summarize button with no "Ask the agent" button.
+
+Every brief line that describes one record (a deal, a contact, a case, a task, a call) is a
+drill button; spec 7 fails if none is. Spec 2 checks that focus is back where the hotkey was
+pressed after Esc, and is still there 2.5 seconds later, from three places: the global Search
+button, the Phone field of the record's inline edit (a field inside another component, on the
+Details tab; the edit is cancelled, nothing is saved) and the launcher. It then removes the element
+focus came from and checks that Esc lands on the launcher, never the page body. Focus inside the
+stage is read with the `:focus` selector, polled: the page's synthetic shadow DOM hides it from
+`document.activeElement`, so Playwright's `toBeFocused` cannot see it. Spec 10 opens the window five
+times after a warm-up and records, for each, the time from the K key event to the first frame after
+the window is marked open; the numbers are logged and attached to the test. Spec 5 waits on the
+Aura response of the panel's Apex method, matched by method name only.
+
+Every test closes the "Meet the new Guidance Center" walkthrough of a fresh org whenever it appears
+(`Panel.gotoAccount`), because it covers the page. It was on screen when spec 2 failed in agent-probe.
+It closes the docked "Welcome to Data Cloud!" pop-up (Minimize, Pop-out, Close) the same way, with its
+Close button, because it opens over the window's corner.
+Spec 2 has also failed there with no walkthrough, cause not found, so it can still be flaky in a fresh
+org ([org-migration.md](../docs/research/org-migration.md), "e2e after FE-9").
+
+Accessibility checks run `axe-core` (a direct devDependency) on the stage element (the
+launcher and the window), WCAG 2.0-2.2
+A and AA rules; the violations of each state are attached to the test as JSON. The stage is
+passed as an element, not a selector: the page's synthetic shadow DOM hides it from
+`document.querySelectorAll`, which is how axe resolves a selector, and `AxeBuilder` from
+`@axe-core/playwright` takes selectors only.
+
+## Capture
+
+The capture scripts for the built-in panel (`06-agent`) and for "Ask the agent" (`07-ask-agent`) were deleted with the feature (FR2); the three images they wrote stay in `docs/assets/`, marked retired in the manifest.
+
+The screenshots and GIFs in `docs/assets/` (listed in `docs/assets/MANIFEST.md`) come from the
+live org with one command:
+
+```bash
+npm run test:e2e    # first: e2e-report.png is a screenshot of this run's HTML report
+npm run capture     # writes every panel still and GIF into docs/assets/
+```
+
+`npm run capture` runs `playwright.capture.config.js` and the `e2e/capture/*.capture.js` files,
+one worker. It is separate from the e2e suite: its own test folder and file pattern, its output in
+`test-results/capture/` (its `.last-run.json` too) and no HTML report, so it never overwrites the
+e2e run's `playwright-report/`. The e2e config does not match `*.capture.js` and Jest only looks
+under `force-app/`.
+
+What it needs:
+
+- Everything the e2e suite needs (above): the deployed panel, a signed-in sf CLI session for the
+  alias, and the seeded sample account Edge Communications. Sign-in is the e2e global setup;
+  capture never logs in itself.
+- `playwright-report/index.html` from a full `npm run test:e2e` run, for `e2e-report.png`.
+- `/opt/homebrew/bin/ffmpeg` and `ffprobe`, which turn the recorded video into GIFs (two-pass
+  palette, 12 fps, at most 900 px wide).
+- Model calls per run: three, all in the custom panel (one brief, one follow-up question and one
+  explorer question). The `test:e2e` run adds about seven. The resolver stills (`not-found.png`,
+  `ambiguous.png`), `hotkey-open.gif`, the whole-window `fr2-conversation-core.png`
+  (`08-conversation-core`, the open panel's empty state) and the whole-window
+  `fr2-compact-launcher.png` and `fr2-compact-open.png` (`09-compact`, the launcher and the open
+  window's empty state) make none. The other capture scripts were written for the 340x480 utility
+  panel and have not been re-run since FE-13 moved the conversation into the window. Nothing is written to the org by the capture
+  itself beyond the panel's own memory rows.
+
+What it produces: stills at viewport 1440x900 and deviceScaleFactor 2, cropped to the panel and
+the record header (at most 1600 px wide); GIFs cut from the test's video, 6 to 20 seconds, each
+starting on a settled frame. `brief-flow.gif` cuts most of the spinner wait between Send and the
+answer. `panel-brief.png` frames the brief's question at the top of the scroll box, and the run
+fails if the headline and the first two section headers are not all inside it. `explore-answer.png`
+frames the question the same way, and the run fails if the table's header row is not inside it.
+Its question is the plain "Which 5 open opportunities have the largest amounts?". Rule 9 of
+`AgentPrompt_Explore` keeps the answer to a short lead and leaves the rows to the table; before that
+rule (BE-17), the answer listed every row and the header row needed 470 px of a 273 px scroll box
+([explore-prompt-1.md](../docs/research/explore-prompt-1.md)).
+Raw videos stay in `test-results/capture/raw/` (gitignored). One frame per second of each
+GIF, and its last frame, are written outside the repo for review (`$TMPDIR/abp-capture-frames/`,
+or `CAPTURE_FRAMES_DIR`).
+
+The brand pair (`brand-swap-before.png`, `brand-swap-after.png`, pattern page 10) needs a different
+brand record deployed for each shot, so a plain `npm run capture` skips it. Run it once per shot,
+right after that shot's `Brand_Setting.Default` record is deployed (the steps are in
+[10-brand-and-theming.md](../docs/patterns/10-brand-and-theming.md)), then deploy the shipped record
+again:
+
+```bash
+BRAND_SHOT=before BRAND_AGENT_NAME='Customer Summary' npx playwright test -c playwright.capture.config.js e2e/capture/06-brand.capture.js
+BRAND_SHOT=after BRAND_AGENT_NAME='Northwind Assist' npx playwright test -c playwright.capture.config.js e2e/capture/06-brand.capture.js
+```
+
+The run fails if the panel's agent name is not the one given, or is cut short. It makes no model
+call.
+
+### Privacy rules
+
+- **Never traced.** Video and screenshots only: tracing and HAR are off, as in the e2e config. The
+  browser URL is never in frame (Playwright captures the page, not the browser chrome).
+- **The running user is never shown.** At run time the script reads the user's Id and username
+  with `sf org display user --target-org <alias> --json` and the name, email and nickname with one
+  User query, which also reads the first and last name. They stay in memory: never printed,
+  logged, put in an error or written to disk. A context init script, which runs in every frame of
+  the page, iframes included, replaces each of them, on every animation frame before paint and
+  inside every shadow root, with `Sample Owner`. The first and last name are replaced only as
+  whole words (no letter or digit on either side), so an agent reply that greets the user by first
+  name is masked while a longer word that contains it is left alone.
+- **Masked everywhere:** any email address becomes `email hidden`, any 15 or 18 character record Id
+  (letters and digits with at least one digit) becomes `Id hidden`, and injected CSS and inline
+  styles hide the global header's avatar button and every round user photo.
+- **Checked, not trusted.** Before every still, and every 0.5 s of every recording, the script reads
+  all visible text in every frame of the page, iframes and shadow roots included, and fails the run
+  if it finds the user's identity (the first or last name as a whole word included), an email
+  address, a 15 or 18 character Id, or `URL_Redacted`. The error names the asset and the category
+  only, never the text.
+- **Cropped.** Stills and GIFs show the panel and enough of the record page for context, not the
+  global header. - **Sample data only.** Captures use the sample account Edge Communications and the other records
+  seeded from `data/sample/`. Explorer questions in captures do not ask for owners.
+- **Review by eye before committing:** every PNG, and the frames written for each GIF.

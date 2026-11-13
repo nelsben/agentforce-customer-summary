@@ -1,0 +1,10 @@
+.delegation/
+.sf/
+.sfdx/
+.localdevserver/
+node_modules/
+.DS_Store
+**/lwc/jsconfig.json
+e2e/.auth/
+test-results/
+playwright-report/

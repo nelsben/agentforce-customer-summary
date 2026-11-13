@@ -1,0 +1,42 @@
+---
+id: BE-24
+title: FR2: brand settings — one Default record sets the agent name, company name, logo, colours and tone; the panel and the Apex prompts read it; a swap guide shows a seller what to change
+domain: backend
+tier: frontier
+tier_reason: new metadata type, Apex, prompt change, LWC theming, deploy and a before/after capture in one card
+status: merged
+fixes: []
+scope: [force-app/main/default/objects/Brand_Setting__mdt/**, force-app/main/default/customMetadata/**, force-app/main/default/classes/BrandSettings*.cls, force-app/main/default/classes/BrandSettings*.cls-meta.xml, force-app/main/default/classes/CustomerSummary*.cls, force-app/main/default/classes/DataExplorer*.cls, force-app/main/default/staticresources/BrandLogo*, force-app/main/default/lwc/customerSummaryPanel/**, force-app/main/default/permissionsets/Customer_Summary_Data_Access.permissionset-meta.xml, docs/patterns/10-brand-and-theming.md, docs/assets/brand-swap-*.png, docs/assets/MANIFEST.md, e2e/**, tests/**]
+forbid: [force-app/main/default/aiAuthoringBundles/**, mcp-door/**, spikes/**, scripts/**, data/**, agents/**, docs/plans/**, README.md, .chassis-delegation.json, reference/**, sfdx-project.json]
+resources: [org-live]
+red_test: new BrandSettingsTest and the new Jest tests for the brand variables and the agent name fail on main and pass after
+gate: test, jest, org
+budget: 2-attempts
+spend: 25
+---
+## Why
+
+Feature revision 2 (FR2): a seller clones the repo and swaps the company name, agent name, logo, colours and tone for a prospect, and implementation teams pull in a prospect's styling easily. Nothing may hard-code a name, colour or font. Covers ledger rows F05, F06, F08 and F09 (tone in the optional agent itself is the parked BE-28) in docs/plans/feature-revision-2.md.
+
+## Done when
+
+- Read first: docs/plans/feature-revision-2.md, docs/plans/fr2-design.md (section 'Theming'), the customerSummaryPanel LWC and its CSS, the Apex that builds the summary synthesis and explorer prompts, and docs/patterns/04-model-provider-seam.md. Load the skills salesforce-development:platform-custom-metadata-type-generate, salesforce-development:platform-apex-generate, salesforce-development:platform-apex-test-generate, experience-lwc:experience-lwc-generate and salesforce-development:platform-metadata-deploy first
+- Metadata: a custom metadata type Brand_Setting__mdt with fields Agent_Name__c (default record value 'Customer Summary'), Company_Name__c (default 'Your Company'), Logo_Resource__c (a static resource name), Primary_Color__c, Accent_Color__c, Surface_Color__c, Ink_Color__c (hex values), Display_Font__c, Body_Font__c and Tone__c (long text, default: a short plain, warm, concise tone line). One record named Default. A neutral default logo static resource BrandLogo (an SVG with no company mark)
+- Apex: a BrandSettings class with one @AuraEnabled(cacheable=true) method returning the Default record as a small DTO, with safe fallbacks when a field is blank; tests with Assert.* cover the read and the fallbacks. Class access is granted in the Customer_Summary data-access permission set only. The summary synthesis and explorer prompts append one tone line from Tone__c and name the company from the company-name field; no other prompt text changes; tests assert both lines are present
+- LWC: the panel reads BrandSettings and sets the fr2-design.md CSS variables (--cs-color-primary, --cs-color-accent, --cs-color-surface, --cs-color-ink, --cs-font-display, --cs-font-body, --cs-radius) as inline custom properties on its host; its stylesheet reads only those variables with neutral fallbacks; every visible use of the agent name comes from Agent_Name__c (the utility item label stays a static label and the swap guide says how to change it). No layout change. Jest covers the variables and the name, with zero accessibility violations. The company name shows in the panel's empty state and the logo in its header; Jest covers both
+- Swap guide: docs/patterns/10-brand-and-theming.md explains, in seller language, the exact file to edit (the Default record) or the Setup path, each field, how to swap the logo resource and the utility item label, how to redeploy, and what tone changes and does not change yet (the optional agent's own instructions are the parked BE-28). Include a before and after screenshot pair (docs/assets/brand-swap-before.png and docs/assets/brand-swap-after.png, using a made-up company such as 'Northwind Health'), captured with the e2e/capture kit, read by eye, with MANIFEST.md rows; each flip of the brand record in the org (to the made-up company, and back to Default) is its own validate and quick deploy under the standing row "Production-classified deploys to `agent-probe`"
+- **Old classes in the org:** the old AccountBrief* classes and tests are still deployed in agent-probe and compile against these classes. Keep every signature and interface method they use. If RunLocalTests fails in an AccountBrief* class, stop and hand back; never delete, stub or redeploy an old class
+- **Shared with the old classes (OPS-30):** `DataExplorer*`, `Explore*`, `AgentLlm*` and the static resources `AgentPrompt_Explore`, `AgentPrompt_BriefEngagement` and `AgentPrompt_BriefDealHistory` are shared with the old org-only classes and tests. OPS-30's first validate failed 4 old tests because a shared prompt's text changed (docs/research/fr2-rename-org.md, "The fix"). So change no shared static resource. Add the tone line and the company name in Apex, appended after the existing system prompt text, so an old test stub that looks for existing text still finds it. If RunLocalTests still fails in an old class, the rule above applies: stop and hand back
+- **Org rules:** `agent-probe` only, with `-o agent-probe` on every `sf` command. Never touch `experimental` or use it as a Dev Hub. Never create a user. Never sign in or out, accept consent or enter credentials. Never retrieve or commit a consumer key or secret. No Ids, usernames, emails, tokens, hostnames or query-string URLs in a file or image. No destructive deploy unless this card's own Approvals row names one. No security or red-team agent test. A deploy is a validate with RunLocalTests and then a quick deploy with the confirmation marker, never `deploy start`. Skip any org step whose Approvals row does not start with "approved", and hand back. A read-only step (a query, a describe, a list, or a retrieve of force-app metadata to a temporary folder outside the repo) needs no row
+- Org, agent-probe only, under the standing approval: validate with RunLocalTests, then quick deploy with CONFIRM_PROD=1; npm run test:e2e still passes in full. Never publish or activate an agent, never sign in or out, never create a user, never touch experimental. Gates: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests, npm run test:unit, bash scripts/validate-org.sh and bash scripts/check-docs.sh (0 broken). No record Ids, org Ids, usernames, emails, tokens or hostnames in any file or image. No tests/__pycache__, and git status --short is empty after the commit. The hand-back's first line says whether the org is back to Default
+
+## Review
+
+Brain review (2026-11-12). Attempt 1: 19 confirmed, 1 refuted (a hand-back wording slip about page 10's inbound links, not a code defect), 8 unverifiable. Attempt 2: 28 confirmed, 0 refuted, 7 unverifiable. The brain read the shared-class diff: the AgentLlm.complete overload only adds (the 3-argument form delegates with null), CustomerSummary's synthesis and every DataExplorer turn pass BrandSettings.promptLines() as the suffix, the pre-reduce calls are unchanged, and no AgentPrompt_* static resource changed (PR #138 bullet held). Privacy grep over 1176 added lines: 0 hits in every category.
+
+Open items carried forward:
+- Summarize label truncates sooner on account pages because the brand shares the bar row; weigh against "no layout change" (Ben's call, or a later panel card)
+- Page 10 (docs/patterns/10-brand-and-theming.md) has no link from README.md or docs/ARCHITECTURE.md; OPS-36 / OPS-49 add it
+- Non-admin brand read unverified (no non-admin user exists; the read falls back to defaults silently on a missing grant); verify once agent-probe-enduser exists (FE-5)
+- The Mermaid diagram on page 10 has not been rendered
+- The worker ran four deploy cycles, one (the truncation fix before the before shot) not foreseen by the card; all on agent-probe under the standing row, the org restored to Default

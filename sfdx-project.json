@@ -1,0 +1,27 @@
+{
+  "packageDirectories": [
+    {
+      "path": "force-app",
+      "default": true
+    },
+    {
+      "path": "mcp-door",
+      "default": false
+    },
+    {
+      "path": "spikes",
+      "default": false
+    }
+  ],
+  "name": "generic-agent",
+  "namespace": "",
+  "sfdcLoginUrl": "https://login.salesforce.com",
+  "sourceApiVersion": "68.0",
+  "replacements": [
+    {
+      "filename": "mcp-door/main/default/externalClientApps/CustomerSummaryMcpClient.eca-meta.xml",
+      "stringToReplace": "__MCP_CONTACT_EMAIL__",
+      "replaceWithEnv": "MCP_CONTACT_EMAIL"
+    }
+  ]
+}
